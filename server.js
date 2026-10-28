@@ -1,6 +1,8 @@
 import { createServer } from 'node:http';
+import { request as httpsRequest } from 'node:https';
+import { randomUUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
-import { accessSync, constants, mkdtempSync, rmSync } from 'node:fs';
+import { accessSync, constants, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { extname, join, normalize } from 'node:path';
@@ -8,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = fileURLToPath(new URL('./public', import.meta.url));
 const envPath = fileURLToPath(new URL('./.env', import.meta.url));
+const gigaChatCa = readFileSync(fileURLToPath(new URL('./certs/russian_trusted_root_ca_pem.crt', import.meta.url)), 'utf8');
 
 async function loadEnv() {
   try {
@@ -37,10 +40,47 @@ const FALLBACK_MODEL = process.env.OPENROUTER_FALLBACK_MODEL || 'nvidia/nemotron
 const QA_MODEL = process.env.OPENROUTER_QA_MODEL || 'nvidia/nemotron-3.5-lightning:free';
 const QA_BACKUP_MODEL = process.env.OPENROUTER_QA_BACKUP_MODEL || 'cohere/north-mini-code:free';
 const FREE_ROUTER_MODEL = process.env.OPENROUTER_FREE_MODEL || 'openrouter/free';
+const GIGACHAT_AUTH_KEY = String(process.env.GIGACHAT_AUTH_KEY || process.env.GIGACHAT_CREDENTIALS || '').trim();
+const GIGACHAT_SCOPE = process.env.GIGACHAT_SCOPE || 'GIGACHAT_API_PERS';
+const GIGACHAT_MODELS = (process.env.GIGACHAT_MODEL || 'GigaChat-2-Max,GigaChat-2-Pro,GigaChat-2')
+  .split(',').map(item => item.trim()).filter(Boolean);
+let gigaChatToken = { value: '', expiresAt: 0 };
+let gigaChatAuthFailure = { message: '', retryAfter: 0 };
 
-// Прямые провайдеры, совместимые с OpenAI-форматом. Подключаются автоматически,
-// если в .env есть соответствующий ключ; используются как запасные, когда
-// у OpenRouter кончились кредиты или дневной лимит бесплатных моделей.
+function requestGigaChatJson(url, { headers, body, timeoutMs }) {
+  return new Promise((resolve, reject) => {
+    const payload = Buffer.from(String(body || ''), 'utf8');
+    const request = httpsRequest(url, {
+      method: 'POST',
+      ca: gigaChatCa,
+      rejectUnauthorized: true,
+      headers: { ...headers, 'Content-Length': payload.length }
+    }, response => {
+      const chunks = [];
+      let size = 0;
+      response.on('data', chunk => {
+        size += chunk.length;
+        if (size > 2_000_000) {
+          request.destroy(new Error('Ответ GigaChat превышает 2 МБ'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        let json = {};
+        try { json = text ? JSON.parse(text) : {}; } catch { json = { message: text }; }
+        resolve({ ok: response.statusCode >= 200 && response.statusCode < 300, status: response.statusCode, json });
+      });
+    });
+    request.setTimeout(timeoutMs, () => request.destroy(new Error(`GigaChat не ответил за ${Math.round(timeoutMs / 1000)} секунд`)));
+    request.on('error', reject);
+    request.end(payload);
+  });
+}
+
+// Дополнительные провайдеры, совместимые с OpenAI-форматом. GigaChat имеет
+// отдельную OAuth-авторизацию и всегда ставится перед этими маршрутами.
 const DIRECT_PROVIDERS = [];
 for (const [envPrefix, label, url, defaultModels] of [
   ['GEMINI', 'Gemini', 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', 'models/gemini-3.5-flash,models/gemini-flash-lite-latest'],
@@ -505,6 +545,92 @@ async function requestDirect(provider, model, messages, temperature) {
   return { content, model: `${provider.id}/${model}`, usedFallback: true };
 }
 
+async function getGigaChatToken(forceRefresh = false) {
+  if (!GIGACHAT_AUTH_KEY) throw new Error('Добавьте GIGACHAT_AUTH_KEY в файл .env');
+  if (!forceRefresh && gigaChatAuthFailure.retryAfter > Date.now()) {
+    throw new Error(gigaChatAuthFailure.message);
+  }
+  if (!forceRefresh && gigaChatToken.value && gigaChatToken.expiresAt > Date.now() + 60_000) {
+    return gigaChatToken.value;
+  }
+
+  const authorization = GIGACHAT_AUTH_KEY.startsWith('Basic ')
+    ? GIGACHAT_AUTH_KEY
+    : `Basic ${GIGACHAT_AUTH_KEY}`;
+  let result;
+  try {
+    result = await requestGigaChatJson('https://ngw.devices.sberbank.ru:9443/api/v2/oauth', {
+      headers: {
+        Authorization: authorization,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+        RqUID: randomUUID(),
+        'User-Agent': 'VibePlay-AI/1.2'
+      },
+      body: new URLSearchParams({ scope: GIGACHAT_SCOPE }),
+      timeoutMs: 30_000
+    });
+  } catch (cause) {
+    const message = `Не удалось подключиться к авторизации GigaChat: ${cause.message}`;
+    gigaChatAuthFailure = { message, retryAfter: Date.now() + 5 * 60_000 };
+    throw new Error(message);
+  }
+  const payload = result.json;
+  if (!result.ok || !payload.access_token) {
+    const detail = payload.message || payload.error_description || payload.error || `ошибка ${result.status}`;
+    const error = new Error(`GigaChat не выдал токен доступа: ${detail}`);
+    gigaChatAuthFailure = { message: error.message, retryAfter: Date.now() + 5 * 60_000 };
+    error.status = result.status === 429 ? 429 : 502;
+    throw error;
+  }
+
+  const rawExpiry = Number(payload.expires_at);
+  const expiresAt = Number.isFinite(rawExpiry) && rawExpiry > 0
+    ? (rawExpiry > 10_000_000_000 ? rawExpiry : rawExpiry * 1000)
+    : Date.now() + 29 * 60_000;
+  gigaChatToken = { value: payload.access_token, expiresAt };
+  gigaChatAuthFailure = { message: '', retryAfter: 0 };
+  return gigaChatToken.value;
+}
+
+async function requestGigaChat(model, messages, temperature, retryAuth = true) {
+  const accessToken = await getGigaChatToken();
+  const result = await requestGigaChatJson('https://api.giga.chat/v1/chat/completions', {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'User-Agent': 'VibePlay-AI/1.2'
+    },
+    body: JSON.stringify({ model, messages, temperature, max_tokens: MAX_TOKENS, stream: false }),
+    timeoutMs: MODEL_TIMEOUT_MS
+  });
+  const payload = result.json;
+  if (result.status === 401 && retryAuth) {
+    gigaChatToken = { value: '', expiresAt: 0 };
+    await getGigaChatToken(true);
+    return requestGigaChat(model, messages, temperature, false);
+  }
+  if (!result.ok) {
+    const detail = payload.message || payload.error?.message || payload.error || `ошибка ${result.status}`;
+    const message = result.status === 402 ? 'закончились бесплатные токены этой модели' : detail;
+    const error = new Error(`GigaChat ${model}: ${message}`);
+    error.status = result.status === 429 ? 429 : 502;
+    throw error;
+  }
+  const content = payload?.choices?.[0]?.message?.content;
+  if (!content || !String(content).trim()) throw new Error(`GigaChat ${model}: пустой ответ`);
+  return { content, model: `gigachat/${model}`, usedFallback: false };
+}
+
+function gigaChatRoutes(messages, temperature) {
+  if (!GIGACHAT_AUTH_KEY || GIGACHAT_AUTH_KEY.includes('your-key')) return [];
+  return GIGACHAT_MODELS.map(model => ({
+    label: `GigaChat ${model}`,
+    run: () => requestGigaChat(model, messages, temperature)
+  }));
+}
+
 function openRouterRoutes(messages, temperature, models) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey || apiKey.includes('your-key')) return [];
@@ -523,7 +649,7 @@ function directProviderRoutes(messages, temperature) {
 
 async function runModelChain(stage, routes) {
   if (!routes.length) {
-    const error = new Error('Добавьте в .env ключ хотя бы одного провайдера: OPENROUTER_API_KEY, GEMINI_API_KEY, GROQ_API_KEY или MISTRAL_API_KEY');
+    const error = new Error('Добавьте в .env ключ хотя бы одного провайдера: GIGACHAT_AUTH_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, GROQ_API_KEY или MISTRAL_API_KEY');
     error.status = 503;
     throw error;
   }
@@ -559,6 +685,7 @@ async function runModelChain(stage, routes) {
 
 async function askGenerator(messages, temperature = 0.75) {
   return runModelChain('Генерация', [
+    ...gigaChatRoutes(messages, temperature),
     ...directProviderRoutes(messages, temperature),
     ...openRouterRoutes(messages, temperature, [MODEL, FALLBACK_MODEL, FREE_ROUTER_MODEL, QA_MODEL, QA_BACKUP_MODEL])
   ]);
@@ -566,6 +693,7 @@ async function askGenerator(messages, temperature = 0.75) {
 
 async function askQa(messages, temperature = 0.1) {
   return runModelChain('QA', [
+    ...gigaChatRoutes(messages, temperature),
     ...directProviderRoutes(messages, temperature),
     ...openRouterRoutes(messages, temperature, [QA_MODEL, QA_BACKUP_MODEL, FALLBACK_MODEL, FREE_ROUTER_MODEL])
   ]);
@@ -668,7 +796,14 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/api/health') {
       return json(res, 200, {
         ok: true,
-        configured: Boolean((process.env.OPENROUTER_API_KEY && !process.env.OPENROUTER_API_KEY.includes('your-key')) || DIRECT_PROVIDERS.length),
+        configured: Boolean((GIGACHAT_AUTH_KEY && !GIGACHAT_AUTH_KEY.includes('your-key')) || (process.env.OPENROUTER_API_KEY && !process.env.OPENROUTER_API_KEY.includes('your-key')) || DIRECT_PROVIDERS.length),
+        primaryProvider: GIGACHAT_AUTH_KEY ? 'GigaChat' : (DIRECT_PROVIDERS[0]?.label || 'OpenRouter'),
+        providers: [
+          ...(GIGACHAT_AUTH_KEY ? ['GigaChat'] : []),
+          ...DIRECT_PROVIDERS.map(provider => provider.label),
+          ...(process.env.OPENROUTER_API_KEY ? ['OpenRouter'] : [])
+        ],
+        gigaChatModels: GIGACHAT_AUTH_KEY ? GIGACHAT_MODELS : [],
         model: MODEL,
         fallbackModel: FALLBACK_MODEL,
         qaModel: QA_MODEL,
@@ -700,6 +835,7 @@ const isMainProcess = Boolean(process.argv[1]) && import.meta.url === pathToFile
 if (isMainProcess) {
   server.listen(PORT, () => {
     console.log(`VibePlay AI: http://localhost:${PORT}`);
+    console.log(GIGACHAT_AUTH_KEY ? `GigaChat: основной (${GIGACHAT_MODELS.join(' -> ')})` : 'GigaChat: добавьте GIGACHAT_AUTH_KEY в .env');
     console.log(process.env.OPENROUTER_API_KEY ? `OpenRouter: ${MODEL} (fallback: ${FALLBACK_MODEL})` : 'OpenRouter: добавьте ключ в .env');
   });
 }

@@ -20,6 +20,7 @@ if not exist ".env" (
   echo [FIRST RUN] Creating .env from .env.example...
   copy /y ".env.example" ".env" >nul
   echo Add an API key, save the file, then close Notepad.
+  echo GigaChat key:   https://developers.sber.ru/studio/workspaces/
   echo Gemini key:     https://aistudio.google.com/apikey
   echo OpenRouter key: https://openrouter.ai/keys
   notepad ".env"

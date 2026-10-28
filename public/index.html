@@ -15,7 +15,7 @@
       <span>VibePlay <b>AI</b></span>
     </a>
     <div class="topbar-right">
-      <span class="api-state" id="apiState"><i></i><span>Проверяем OpenRouter…</span></span>
+      <span class="api-state" id="apiState"><i></i><span>Проверяем ИИ…</span></span>
       <button class="icon-button" id="helpButton" type="button" aria-label="Как запустить" title="Как запустить">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9.6 9a2.5 2.5 0 0 1 4.8.9c0 1.8-2.4 2.1-2.4 3.6M12 17.5h.01"></path></svg>
       </button>
@@ -129,10 +129,10 @@
     <h2>Запуск за 3 шага</h2>
     <ol>
       <li><span>1</span><div>Скопируйте <code>.env.example</code> в <code>.env</code></div></li>
-      <li><span>2</span><div>Вставьте ключ в <code>OPENROUTER_API_KEY</code></div></li>
+      <li><span>2</span><div>Вставьте ключ проекта Сбера в <code>GIGACHAT_AUTH_KEY</code></div></li>
       <li><span>3</span><div>Запустите <code>npm start</code> и откройте <code>localhost:3000</code></div></li>
     </ol>
-    <p>Модель меняется одной строкой <code>OPENROUTER_MODEL</code>. Ключ никогда не отправляется в браузер.</p>
+    <p>Основная модель задаётся в <code>GIGACHAT_MODEL</code>. Gemini и OpenRouter автоматически остаются резервом. Ключи никогда не отправляются в браузер.</p>
   </dialog>
 
   <script src="/app.js" defer></script>

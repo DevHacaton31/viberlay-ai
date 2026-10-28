@@ -281,7 +281,7 @@ async function generate(revision = '') {
       : revision ? 'Изменения готовы' : 'Игра готова — можно играть!');
   } catch (error) {
     notify(error.message);
-    if (/OPENROUTER_API_KEY/.test(error.message)) elements.help.showModal();
+    if (/(?:GIGACHAT_AUTH_KEY|OPENROUTER_API_KEY|GEMINI_API_KEY)/.test(error.message)) elements.help.showModal();
   } finally {
     setBusy(false);
   }
@@ -389,11 +389,13 @@ async function checkHealth() {
   try {
     const response = await fetch('/api/health');
     const data = await response.json();
-    const names = ['OpenRouter', ...(data.directProviders || []).map(item => item.split(':')[0])];
+    const names = data.providers?.length
+      ? data.providers
+      : ['OpenRouter', ...(data.directProviders || []).map(item => item.split(':')[0])];
     elements.apiState.classList.add(data.configured ? 'online' : 'warning');
     elements.apiState.querySelector('span').textContent = data.configured
       ? `AI: ${[...new Set(names)].join(' + ')}`
-      : 'Нужен ключ: OpenRouter / Gemini / Groq / Mistral';
+      : 'Нужен ключ: GigaChat / OpenRouter / Gemini';
   } catch {
     elements.apiState.classList.add('warning');
     elements.apiState.querySelector('span').textContent = 'Сервер недоступен';
