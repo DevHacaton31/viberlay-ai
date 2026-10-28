@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f5cf25">
+  <meta name="description" content="VibePlay AI — генератор браузерных HTML5-игр по текстовому описанию">
+  <title>VibePlay AI — игры по твоим словам</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#" aria-label="VibePlay AI — на главную">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span>VibePlay <b>AI</b></span>
+    </a>
+    <div class="topbar-right">
+      <span class="api-state" id="apiState"><i></i><span>Проверяем OpenRouter…</span></span>
+      <button class="icon-button" id="helpButton" type="button" aria-label="Как запустить" title="Как запустить">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9.6 9a2.5 2.5 0 0 1 4.8.9c0 1.8-2.4 2.1-2.4 3.6M12 17.5h.01"></path></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="creator-panel">
+      <div class="eyebrow"><span></span> Новая игра</div>
+      <h1>Опиши игру.<br><em>ИИ соберёт её.</em></h1>
+      <p class="lead">От идеи до играбельного HTML за минуту. Без кода.</p>
+
+      <form id="generateForm">
+        <div class="prompt-shell">
+          <label for="promptInput">Что будем создавать?</label>
+          <textarea id="promptInput" maxlength="2000" rows="5" placeholder="Например: замути змейку для бабушки — медленную, с крупными кнопками и добрым дизайном"></textarea>
+          <div class="prompt-footer">
+            <span id="charCount">0 / 2000</span>
+            <span class="shortcut">Ctrl ↵</span>
+          </div>
+        </div>
+
+        <div class="chips" aria-label="Примеры запросов">
+          <button type="button" data-prompt="Замути змейку для бабушки: медленный темп, очень крупные кнопки, высокий контраст и добрые подсказки">🐍 Для бабушки</button>
+          <button type="button" data-prompt="Сделай яркую космическую аркаду для детей 8–10 лет: ловить звёзды и избегать метеоритов, три коротких уровня">🚀 Космоаркада</button>
+          <button type="button" data-prompt="Создай спокойную головоломку в стиле японского сада: соединять одинаковые цветы за ограниченное число ходов">🧩 Дзен-пазл</button>
+        </div>
+
+        <button class="generate-button" id="generateButton" type="submit">
+          <span class="button-label"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.2 4.1L17 9l-3.8 1.9L12 15l-1.2-4.1L7 9l3.8-1.9L12 3Z"></path><path d="m19 14 .7 2.3L22 17l-2.3.7L19 20l-.7-2.3L16 17l2.3-.7L19 14Z"></path></svg> Создать игру</span>
+          <span class="button-loading"><i></i> Генерируем магию…</span>
+        </button>
+      </form>
+
+      <div class="progress-card" id="progressCard" hidden>
+        <div class="progress-top"><span id="progressLabel">Продумываем механику</span><b id="progressValue">18%</b></div>
+        <div class="progress-track"><i id="progressBar"></i></div>
+        <small>Обычно это занимает 20–60 секунд</small>
+      </div>
+
+      <section class="history-section">
+        <div class="section-title"><span>Недавние игры</span><button id="clearHistory" type="button">Очистить</button></div>
+        <div class="history-list" id="historyList"></div>
+      </section>
+    </aside>
+
+    <section class="stage-panel">
+      <div class="stage-toolbar">
+        <div class="view-tabs" role="tablist">
+          <button class="active" id="previewTab" type="button" role="tab" aria-selected="true">Предпросмотр</button>
+          <button id="codeTab" type="button" role="tab" aria-selected="false">HTML-код</button>
+        </div>
+        <div class="stage-actions">
+          <button class="secondary-button" id="repairButton" type="button" disabled title="Проверить и пересобрать текущую игру">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5a4 4 0 0 0-5-5L12 4 9 7 6.5 4.5a4 4 0 0 0 5 5L4 17l3 3 7.5-7.5"></path></svg> Починить игру
+          </button>
+          <button class="secondary-button" id="demoButton" type="button" title="Открыть готовый пример">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7Z"></path></svg> Демо
+          </button>
+          <button class="secondary-button" id="downloadButton" type="button" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14"></path></svg> Скачать HTML
+          </button>
+        </div>
+      </div>
+
+      <div class="stage-content">
+        <div class="empty-state" id="emptyState">
+          <div class="orbit-visual" aria-hidden="true">
+            <span class="orbit orbit-one"><i>✦</i></span>
+            <span class="orbit orbit-two"><i>●</i></span>
+            <div class="game-card-art"><span>▶</span><i></i><i></i></div>
+          </div>
+          <h2>Здесь появится твоя игра</h2>
+          <p>Опиши идею слева или запусти демо,<br>чтобы увидеть, как всё работает.</p>
+          <div class="feature-row">
+            <span><b>01</b> Один HTML</span>
+            <span><b>02</b> Touch-ready</span>
+            <span><b>03</b> WebView</span>
+          </div>
+        </div>
+
+        <div class="preview-area" id="previewArea" hidden>
+          <div class="device-toggle" aria-label="Размер предпросмотра">
+            <button class="active" type="button" data-device="phone" aria-label="Телефон"><svg viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"></rect><path d="M10 5h4M11 19h2"></path></svg></button>
+            <button type="button" data-device="tablet" aria-label="Планшет"><svg viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2"></rect><path d="M11 19h2"></path></svg></button>
+            <button type="button" data-device="wide" aria-label="Широкий экран"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="14" rx="2"></rect><path d="M8 22h8m-4-4v4"></path></svg></button>
+          </div>
+          <div class="device-frame phone" id="deviceFrame">
+            <div class="device-bar"><span></span><b id="gameTitle">Новая игра</b><i></i></div>
+            <iframe id="gameFrame" title="Предпросмотр сгенерированной игры" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+          </div>
+          <form class="revision-bar" id="revisionForm">
+            <input id="revisionInput" maxlength="1000" placeholder="Попроси изменить: сделай кнопки больше, добавь уровни…">
+            <button type="submit" aria-label="Применить изменение"><svg viewBox="0 0 24 24"><path d="m5 12 14-7-4 14-3-6-7-1Z"></path></svg></button>
+          </form>
+        </div>
+
+        <div class="code-area" id="codeArea" hidden>
+          <div class="code-head"><span>index.html</span><button id="copyButton" type="button">Копировать</button></div>
+          <pre><code id="codeOutput"></code></pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <dialog id="helpDialog">
+    <button class="dialog-close" id="closeHelp" type="button" aria-label="Закрыть">×</button>
+    <div class="dialog-icon">⚡</div>
+    <h2>Запуск за 3 шага</h2>
+    <ol>
+      <li><span>1</span><div>Скопируйте <code>.env.example</code> в <code>.env</code></div></li>
+      <li><span>2</span><div>Вставьте ключ в <code>OPENROUTER_API_KEY</code></div></li>
+      <li><span>3</span><div>Запустите <code>npm start</code> и откройте <code>localhost:3000</code></div></li>
+    </ol>
+    <p>Модель меняется одной строкой <code>OPENROUTER_MODEL</code>. Ключ никогда не отправляется в браузер.</p>
+  </dialog>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
